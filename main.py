@@ -8,20 +8,14 @@ from dotenv import load_dotenv
 import httpx
 from typing import Optional
 
-# Load environment variables
+
 load_dotenv()
-
 app = FastAPI()
-
-
-
-# Configuration from environment variables
 LOGIN_URL = os.getenv('LOGIN_URL', 'https://thingsboard.bda-itnovum.com/api/auth/login')
 TELEMETRY_URL_TEMPLATE = os.getenv('TELEMETRY_URL_TEMPLATE', 'https://thingsboard.bda-itnovum.com/api/plugins/telemetry/{DEVICE}/{DEVICE_ID}/values/timeseries')
 USERNAME = os.getenv('USERNAME')
 PASSWORD = os.getenv('PASSWORD')
 
-# Pydantic models for request bodies
 class AuthCredentials(BaseModel):
     username: str
     password: str
@@ -32,15 +26,12 @@ class TelemetryRequest(BaseModel):
 
 @app.get("/")
 async def root():
-    return {"message": "Hello World"}
+    return {'message': 'Hi, ThingsBoard 😊'}
 
 
 
 @app.post("/login")
 async def login(credentials: AuthCredentials):
-    """
-    Authenticates with the external API and retrieves a token.
-    """
     async with httpx.AsyncClient() as client:
         try:
             response = await client.post(LOGIN_URL, json={
