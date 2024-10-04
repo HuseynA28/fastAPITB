@@ -1,6 +1,7 @@
 # main.py
 
 from fastapi import FastAPI, HTTPException, Depends
+
 from pydantic import BaseModel
 import os
 from dotenv import load_dotenv
@@ -11,6 +12,8 @@ from typing import Optional
 load_dotenv()
 
 app = FastAPI()
+
+
 
 # Configuration from environment variables
 LOGIN_URL = os.getenv('LOGIN_URL', 'https://thingsboard.bda-itnovum.com/api/auth/login')
@@ -23,57 +26,62 @@ class AuthCredentials(BaseModel):
     username: str
     password: str
 
-async def authenticate(credentials: Optional[AuthCredentials] = None) -> str:
-    """
-    Authenticates with the external API and returns a token.
-    If credentials are not provided, uses the default ones from the environment.
-    """
-    auth_data = {}
-    if credentials:
-        auth_data = {
-            "username": credentials.username,
-            "password": credentials.password
-        }
-    else:
-        auth_data = {
-            "username": USERNAME,
-            "password": PASSWORD
-        }
-
-    async with httpx.AsyncClient() as client:
-        try:
-            response = await client.post(LOGIN_URL, json=auth_data)
-            response.raise_for_status()
-        except httpx.HTTPError as exc:
-            raise HTTPException(
-                status_code=exc.response.status_code if exc.response else 500,
-                detail=f"Authentication failed: {str(exc)}"
-            ) from exc
-
-        data = response.json()
-        token = data.get("token")
-        if not token:
-            raise HTTPException(status_code=500, detail="Token not found in authentication response")
-        
-        return token
+class TelemetryRequest(BaseModel):
+    device: str
+    device_id: str
 
 @app.get("/")
 async def root():
     return {"message": "Hello World"}
+
+
 
 @app.post("/login")
 async def login(credentials: AuthCredentials):
     """
     Authenticates with the external API and retrieves a token.
     """
-    token = await authenticate(credentials)
-    return {"token": token}
+    async with httpx.AsyncClient() as client:
+        try:
+            response = await client.post(LOGIN_URL, json={
+                "username": credentials.username,
+                "password": credentials.password
+            })
+            response.raise_for_status()
+        except httpx.HTTPError as exc:
+            raise HTTPException(status_code=exc.response.status_code if exc.response else 500,
+                                detail=str(exc)) from exc
+
+        data = response.json()
+        token = data.get("token")
+        if not token:
+            raise HTTPException(status_code=500, detail="Token not found in response")
+        
+        return {"token": token}
 
 @app.get("/telemetry")
-async def get_telemetry(device: str, device_id: str, token: Optional[str] = Depends(authenticate)):
+async def get_telemetry(device: str, device_id: str, token: Optional[str] = None):
     """
     Retrieves telemetry data from the external API using the provided token.
     """
+    if not token:
+        # If token is not provided, attempt to authenticate using environment credentials
+        async with httpx.AsyncClient() as client:
+            try:
+                auth_response = await client.post(LOGIN_URL, json={
+                    "username": USERNAME,
+                    "password": PASSWORD
+                })
+                auth_response.raise_for_status()
+            except httpx.HTTPError as exc:
+                raise HTTPException(status_code=exc.response.status_code if exc.response else 500,
+                                    detail=str(exc)) from exc
+
+            auth_data = auth_response.json()
+            token = auth_data.get("token")
+            if not token:
+                raise HTTPException(status_code=500, detail="Token not found in authentication response")
+
     telemetry_url = TELEMETRY_URL_TEMPLATE.format(DEVICE=device, DEVICE_ID=device_id)
     headers = {
         "Authorization": f"Bearer {token}"
@@ -83,9 +91,7 @@ async def get_telemetry(device: str, device_id: str, token: Optional[str] = Depe
             response = await client.get(telemetry_url, headers=headers)
             response.raise_for_status()
         except httpx.HTTPError as exc:
-            raise HTTPException(
-                status_code=exc.response.status_code if exc.response else 500,
-                detail=f"Telemetry fetch failed: {str(exc)}"
-            ) from exc
+            raise HTTPException(status_code=exc.response.status_code if exc.response else 500,
+                                detail=str(exc)) from exc
         
         return response.json()
