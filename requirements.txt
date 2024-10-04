@@ -1,7 +1,5 @@
-GitPython
-itsdangerous
-Jinja2
-requests
-SQLAlchemy
-typer[all]
-sqlmodel
+fastapi
+uvicorn
+python-dotenv
+httpx
+pydantic
