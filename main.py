@@ -1,35 +1,36 @@
-# main.py
-
-from fastapi import FastAPI, HTTPException, Depends
-
+from fastapi import FastAPI, HTTPException, Depends, Query
 from pydantic import BaseModel
 import os
 from dotenv import load_dotenv
 import httpx
 from typing import Optional
 
-
+# Load environment variables
 load_dotenv()
-app = FastAPI()
-LOGIN_URL = os.getenv('LOGIN_URL', 'https://thingsboard.bda-itnovum.com/api/auth/login')
-TELEMETRY_URL_TEMPLATE = os.getenv('TELEMETRY_URL_TEMPLATE', 'https://thingsboard.bda-itnovum.com/api/plugins/telemetry/{DEVICE}/{DEVICE_ID}/values/timeseries')
-USERNAME = os.getenv('USERNAME')
-PASSWORD = os.getenv('PASSWORD')
 
+# Initialize FastAPI app
+app = FastAPI()
+
+# Environment variables
+LOGIN_URL = os.getenv('LOGIN_URL', 'https://dacs.site/api/auth/login')  # Fallback URL for login
+BASE_URL = os.getenv('BASE_URL', 'https://dacs.site')  # Ensure this includes https://
+TELEMETRY_URL_TEMPLATE = os.getenv('TELEMETRY_URL_TEMPLATE', "/api/plugins/telemetry/{entityType}/{entityId}/values/timeseries")
+
+# Pydantic models
 class AuthCredentials(BaseModel):
     username: str
     password: str
 
 class TelemetryRequest(BaseModel):
-    device: str
-    device_id: str
+    entityType: str
+    entityId: str
 
+# Root endpoint
 @app.get("/")
 async def root():
     return {'message': 'Hi, ThingsBoard 😊'}
 
-
-
+# Login endpoint
 @app.post("/login")
 async def login(credentials: AuthCredentials):
     async with httpx.AsyncClient() as client:
@@ -50,13 +51,16 @@ async def login(credentials: AuthCredentials):
         
         return {"token": token}
 
-@app.get("/telemetry")
-async def get_telemetry(device: str, device_id: str, token: Optional[str] = None):
-    """
-    Retrieves telemetry data from the external API using the provided token.
-    """
+# Latest Telemetry endpoint
+@app.get("/latest-telemetry")
+async def get_telemetry(
+    entityType: str, 
+    entityId: str, 
+    keys: Optional[str] = Query(None), 
+    useStrictDataTypes: Optional[bool] = Query(False),
+    token: Optional[str] = None
+):
     if not token:
-        # If token is not provided, attempt to authenticate using environment credentials
         async with httpx.AsyncClient() as client:
             try:
                 auth_response = await client.post(LOGIN_URL, json={
@@ -64,25 +68,27 @@ async def get_telemetry(device: str, device_id: str, token: Optional[str] = None
                     "password": PASSWORD
                 })
                 auth_response.raise_for_status()
-            except httpx.HTTPError as exc:
-                raise HTTPException(status_code=exc.response.status_code if exc.response else 500,
-                                    detail=str(exc)) from exc
+                auth_data = auth_response.json()
+                token = auth_data.get("token")
+                if not token:
+                    raise HTTPException(status_code=500, detail="Token not found in authentication response")
+            except httpx.RequestError as exc:
+                raise HTTPException(status_code=500, detail=f"Authentication failed: {str(exc)}")
 
-            auth_data = auth_response.json()
-            token = auth_data.get("token")
-            if not token:
-                raise HTTPException(status_code=500, detail="Token not found in authentication response")
+    telemetry_url = f"{BASE_URL}{TELEMETRY_URL_TEMPLATE.format(entityType=entityType, entityId=entityId)}"
+    headers = {"Authorization": f"Bearer {token}"}
+    params = {"keys": keys} if keys else {}
+    if useStrictDataTypes:
+        params['useStrictDataTypes'] = 'true' if useStrictDataTypes else 'false'
 
-    telemetry_url = TELEMETRY_URL_TEMPLATE.format(DEVICE=device, DEVICE_ID=device_id)
-    headers = {
-        "Authorization": f"Bearer {token}"
-    }
     async with httpx.AsyncClient() as client:
         try:
-            response = await client.get(telemetry_url, headers=headers)
+            response = await client.get(telemetry_url, headers=headers, params=params)
             response.raise_for_status()
         except httpx.HTTPError as exc:
             raise HTTPException(status_code=exc.response.status_code if exc.response else 500,
-                                detail=str(exc)) from exc
-        
+                                detail=str(exc))
+        except httpx.RequestError as exc:
+            raise HTTPException(status_code=500, detail=f"Request failed: {str(exc)}")
+
         return response.json()
